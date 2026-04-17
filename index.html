@@ -361,32 +361,43 @@ a.tbl-link:hover { text-decoration: underline; }
 
   <!-- ① DASHBOARD -->
   <div id="page-dashboard" class="page active">
-    <div class="page-header">
-      <div class="page-title">銷售總覽 Sales Dashboard</div>
-      <div class="page-sub" id="dashSub">載入中...</div>
+    <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+      <div>
+        <div class="page-title">銷售總覽 Sales Dashboard</div>
+        <div class="page-sub" id="dashSub">載入中...</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;" id="monthSwitcher" style="display:none;">
+        <button onclick="switchMonth(-1)" style="font-family:'DM Sans',sans-serif;font-size:12px;padding:5px 12px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--text2);">← 上月</button>
+        <span id="currentMonthLabel" style="font-size:13px;font-weight:500;color:var(--text);min-width:80px;text-align:center;">—</span>
+        <button onclick="switchMonth(1)" id="nextMonthBtn" style="font-family:'DM Sans',sans-serif;font-size:12px;padding:5px 12px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--text2);">當月 →</button>
+      </div>
     </div>
 
-    <div class="metrics" id="trafficMetrics">
+    <div class="metrics" style="margin-bottom:1.25rem;">
       <div class="metric">
         <div class="metric-label">總曝光 Impressions</div>
         <div class="metric-value" id="m-impressions">—</div>
+        <div id="mom-imp-badge" style="font-size:11px;margin-top:4px;"></div>
       </div>
       <div class="metric">
         <div class="metric-label">頁面瀏覽 Page Views</div>
         <div class="metric-value" id="m-pageviews">—</div>
+        <div id="mom-pv-badge" style="font-size:11px;margin-top:4px;"></div>
       </div>
       <div class="metric">
         <div class="metric-label">總銷售額 GMV</div>
         <div class="metric-value" id="m-gmv">—</div>
+        <div id="mom-gmv-badge" style="font-size:11px;margin-top:4px;"></div>
       </div>
       <div class="metric">
         <div class="metric-label">訂單數 Orders</div>
         <div class="metric-value" id="m-orders">—</div>
+        <div id="mom-ord-badge" style="font-size:11px;margin-top:4px;"></div>
       </div>
     </div>
 
     <div class="card" style="margin-bottom:1.25rem;">
-      <div class="card-title">每日曝光趨勢 Daily Impressions</div>
+      <div class="card-title" id="dailyChartTitle">每日曝光趨勢 Daily Impressions</div>
       <div style="position:relative;height:220px;"><canvas id="impressionsChart"></canvas></div>
     </div>
 
@@ -405,29 +416,15 @@ a.tbl-link:hover { text-decoration: underline; }
 
     <!-- MoM Section (hidden until 2+ months of data) -->
     <div id="momSection" style="display:none;">
-      <div class="metrics" style="margin-bottom:1.25rem;">
-        <div class="metric">
-          <div class="metric-label">GMV 月增率 MoM</div>
-          <div class="metric-value" id="mom-gmv-growth" style="font-size:22px;">—</div>
+      <div class="two-col" style="margin-bottom:0;">
+        <div class="card">
+          <div class="card-title">GMV 月份比較 GMV by Month</div>
+          <div style="position:relative;height:220px;"><canvas id="momGmvChart"></canvas></div>
         </div>
-        <div class="metric">
-          <div class="metric-label">曝光月增率 MoM</div>
-          <div class="metric-value" id="mom-imp-growth" style="font-size:22px;">—</div>
+        <div class="card">
+          <div class="card-title">曝光月份比較 Impressions by Month</div>
+          <div style="position:relative;height:220px;"><canvas id="momImpChart"></canvas></div>
         </div>
-        <div class="metric">
-          <div class="metric-label">訂單月增率 MoM</div>
-          <div class="metric-value" id="mom-ord-growth" style="font-size:22px;">—</div>
-        </div>
-      </div>
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-          <div class="card-title" style="margin-bottom:0;">月份比較 Month-over-Month</div>
-          <div style="display:flex;gap:12px;font-size:11px;color:var(--text3);">
-            <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:2px;background:#2d7a4f;display:inline-block;"></span>GMV ($)</span>
-            <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:2px;background:#185FA5;display:inline-block;"></span>Impressions</span>
-          </div>
-        </div>
-        <div style="position:relative;height:240px;"><canvas id="momChart"></canvas></div>
       </div>
     </div>
   </div>
@@ -990,41 +987,19 @@ async function loadTrafficFromSheets() {
 
     const months = Object.keys(monthData).sort();
     const latestMonth = months[months.length - 1];
-    const latest = monthData[latestMonth];
 
-    // Update KPI cards from latest month
-    document.getElementById('m-impressions').textContent = latest.impressions || '—';
-    document.getElementById('m-pageviews').textContent = latest.pageviews || '—';
-    document.getElementById('m-gmv').textContent = latest.gmv ? '$' + latest.gmv.toFixed(2) : '—';
-    document.getElementById('m-orders').textContent = latest.orders || '—';
-    document.getElementById('dashSub').textContent = months.length > 1
-      ? `共 ${months.length} 個月數據 · 最新：${latestMonth}`
-      : `數據月份：${latestMonth}`;
+    // Store globally for month switcher
+    window._trafficMonthData = monthData;
+    window._trafficMonths = months;
+    window._currentMonthIdx = months.length - 1;
 
-    // Daily impressions chart for latest month
-    const dailyLabels = latest.dailyRows.map(r => r.date.slice(5));
-    const dailyImps = latest.dailyRows.map(r => r.imp);
-
-    destroyChart('impressionsChart');
-    if (dailyLabels.length > 0) {
-      charts.impressionsChart = new Chart(document.getElementById('impressionsChart'), {
-        type: 'bar',
-        data: {
-          labels: dailyLabels,
-          datasets: [{ label: 'Impressions', data: dailyImps, backgroundColor: '#2d7a4f', borderRadius: 4 }]
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 }, maxRotation: 45, autoSkip: true } },
-            y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 } }, beginAtZero: true }
-          }
-        }
-      });
+    // Show month switcher if multiple months
+    if (months.length > 1) {
+      document.getElementById('monthSwitcher').style.display = 'flex';
     }
 
-    // MoM comparison chart (only if multiple months)
+    renderMonthKPI(months.length - 1);
+
     if (months.length > 1) {
       renderMoMCharts(monthData, months);
     }
@@ -1035,48 +1010,109 @@ async function loadTrafficFromSheets() {
   }
 }
 
+function switchMonth(dir) {
+  const months = window._trafficMonths || [];
+  let idx = (window._currentMonthIdx || 0) + dir;
+  idx = Math.max(0, Math.min(months.length - 1, idx));
+  window._currentMonthIdx = idx;
+  renderMonthKPI(idx);
+}
+
+function momBadge(curr, prev) {
+  if (!prev || prev === 0) return '';
+  const pct = ((curr - prev) / prev * 100).toFixed(1);
+  const up = pct >= 0;
+  return `<span style="color:${up ? 'var(--green)' : 'var(--red)'};font-weight:500;">${up ? '↑' : '↓'} ${Math.abs(pct)}% vs 上月</span>`;
+}
+
+function renderMonthKPI(idx) {
+  const months = window._trafficMonths || [];
+  const monthData = window._trafficMonthData || {};
+  if (!months.length) return;
+
+  const m = monthData[months[idx]];
+  const prev = idx > 0 ? monthData[months[idx - 1]] : null;
+  const isLatest = idx === months.length - 1;
+
+  document.getElementById('currentMonthLabel').textContent = months[idx];
+  document.getElementById('nextMonthBtn').style.opacity = isLatest ? '0.3' : '1';
+  document.getElementById('nextMonthBtn').style.pointerEvents = isLatest ? 'none' : 'auto';
+
+  document.getElementById('dashSub').textContent = `${months[idx]} 數據${months.length > 1 ? `（共 ${months.length} 個月）` : ''}`;
+
+  document.getElementById('m-impressions').textContent = m.impressions ? m.impressions.toLocaleString() : '—';
+  document.getElementById('m-pageviews').textContent   = m.pageviews   ? m.pageviews.toLocaleString()   : '—';
+  document.getElementById('m-gmv').textContent         = m.gmv         ? '$' + m.gmv.toFixed(2)          : '—';
+  document.getElementById('m-orders').textContent      = m.orders      ? m.orders                        : '—';
+
+  document.getElementById('mom-imp-badge').innerHTML = prev ? momBadge(m.impressions, prev.impressions) : '';
+  document.getElementById('mom-pv-badge').innerHTML  = prev ? momBadge(m.pageviews,   prev.pageviews)   : '';
+  document.getElementById('mom-gmv-badge').innerHTML = prev ? momBadge(m.gmv,         prev.gmv)         : '';
+  document.getElementById('mom-ord-badge').innerHTML = prev ? momBadge(m.orders,      prev.orders)      : '';
+
+  // Daily impressions chart
+  const dailyLabels = m.dailyRows.map(r => r.date.slice(5));
+  const dailyImps   = m.dailyRows.map(r => r.imp);
+  document.getElementById('dailyChartTitle').textContent = `每日曝光趨勢 Daily Impressions — ${months[idx]}`;
+
+  destroyChart('impressionsChart');
+  if (dailyLabels.length > 0) {
+    charts.impressionsChart = new Chart(document.getElementById('impressionsChart'), {
+      type: 'bar',
+      data: {
+        labels: dailyLabels,
+        datasets: [{ label: 'Impressions', data: dailyImps, backgroundColor: '#2d7a4f', borderRadius: 4 }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 }, maxRotation: 45, autoSkip: true } },
+          y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 } }, beginAtZero: true }
+        }
+      }
+    });
+  }
+}
+
 function renderMoMCharts(monthData, months) {
   const momSection = document.getElementById('momSection');
   if (!momSection) return;
   momSection.style.display = 'block';
 
-  const gmvData = months.map(m => monthData[m].gmv);
+  const gmvData = months.map(m => parseFloat(monthData[m].gmv.toFixed(2)));
   const impData = months.map(m => monthData[m].impressions);
-  const ordData = months.map(m => monthData[m].orders);
 
-  // MoM growth rate
-  const latest = monthData[months[months.length-1]];
-  const prev   = monthData[months[months.length-2]];
-  const gmvGrowth = prev.gmv > 0 ? ((latest.gmv - prev.gmv) / prev.gmv * 100).toFixed(1) : null;
-  const impGrowth = prev.impressions > 0 ? ((latest.impressions - prev.impressions) / prev.impressions * 100).toFixed(1) : null;
-  const ordGrowth = prev.orders > 0 ? ((latest.orders - prev.orders) / prev.orders * 100).toFixed(1) : null;
-
-  document.getElementById('mom-gmv-growth').textContent   = gmvGrowth !== null ? (gmvGrowth > 0 ? '+' : '') + gmvGrowth + '%' : '—';
-  document.getElementById('mom-imp-growth').textContent   = impGrowth !== null ? (impGrowth > 0 ? '+' : '') + impGrowth + '%' : '—';
-  document.getElementById('mom-ord-growth').textContent   = ordGrowth !== null ? (ordGrowth > 0 ? '+' : '') + ordGrowth + '%' : '—';
-  document.getElementById('mom-gmv-growth').style.color   = gmvGrowth > 0 ? 'var(--green)' : 'var(--red)';
-  document.getElementById('mom-imp-growth').style.color   = impGrowth > 0 ? 'var(--green)' : 'var(--red)';
-  document.getElementById('mom-ord-growth').style.color   = ordGrowth > 0 ? 'var(--green)' : 'var(--red)';
-
-  destroyChart('momChart');
-  charts.momChart = new Chart(document.getElementById('momChart'), {
+  destroyChart('momGmvChart');
+  charts.momGmvChart = new Chart(document.getElementById('momGmvChart'), {
     type: 'bar',
     data: {
       labels: months,
-      datasets: [
-        { label: 'GMV ($)', data: gmvData, backgroundColor: '#2d7a4f', borderRadius: 4, yAxisID: 'y' },
-        { label: 'Impressions', data: impData, backgroundColor: '#185FA5', borderRadius: 4, yAxisID: 'y2' },
-      ]
+      datasets: [{ label: 'GMV ($)', data: gmvData, backgroundColor: '#2d7a4f', borderRadius: 4 }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false }
-      },
+      plugins: { legend: { display: false } },
       scales: {
         x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 12 } } },
-        y:  { position: 'left',  grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#2d7a4f', font: { size: 11 }, callback: v => '$' + v }, beginAtZero: true },
-        y2: { position: 'right', grid: { display: false }, ticks: { color: '#185FA5', font: { size: 11 } }, beginAtZero: true }
+        y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 }, callback: v => '$' + v }, beginAtZero: true }
+      }
+    }
+  });
+
+  destroyChart('momImpChart');
+  charts.momImpChart = new Chart(document.getElementById('momImpChart'), {
+    type: 'bar',
+    data: {
+      labels: months,
+      datasets: [{ label: 'Impressions', data: impData, backgroundColor: '#185FA5', borderRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 12 } } },
+        y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 } }, beginAtZero: true }
       }
     }
   });

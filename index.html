@@ -925,13 +925,10 @@ async function loadTrafficFromSheets() {
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: 'array' });
 
-    // Find all month sheets (format: YYYY-MM)
+    // Find all YYYY-MM sheets
     const monthSheets = wb.SheetNames.filter(n => /^\d{4}-\d{2}$/.test(n)).sort();
-
-    // If no YYYY-MM sheets found, fall back to first sheet
     const sheetsToRead = monthSheets.length > 0 ? monthSheets : [wb.SheetNames[0]];
 
-    // monthData: { 'YYYY-MM': { impressions, pageviews, gmv, orders, dailyRows[] } }
     const monthData = {};
 
     for (const sheetName of sheetsToRead) {
@@ -939,46 +936,54 @@ async function loadTrafficFromSheets() {
       if (!ws) continue;
       const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
 
-      // Determine month key
-      const monthKey = /^\d{4}-\d{2}$/.test(sheetName)
-        ? sheetName
-        : null;
+      const monthKey = /^\d{4}-\d{2}$/.test(sheetName) ? sheetName : null;
 
-      let totalImpressions = 0, totalPageviews = 0, totalGmv = 0, totalOrders = 0;
-      let dailyStart = -1;
-      let usedSummary = false;
-
+      // Find header row — look for row containing 'Date'
+      let headerIdx = -1;
       for (let i = 0; i < rows.length; i++) {
-        const c0 = String(rows[i][0] || '').trim();
-        // Summary row
-        if (!usedSummary && c0.includes('~') && rows[i][1] !== undefined) {
-          const r = rows[i];
-          const imp = Number(r[1]) || 0;
-          const pv  = Number(r[2]) || 0;
-          const gmv = parseFloat(r[6]) || 0;
-          const ord = Number(r[7]) || 0;
-          if (imp || pv || gmv || ord) {
-            totalImpressions = imp; totalPageviews = pv; totalGmv = gmv; totalOrders = ord;
-            usedSummary = true;
-          }
-        }
-        if (c0 === 'Date') dailyStart = i + 1;
+        if (String(rows[i][0]).trim() === 'Date') { headerIdx = i; break; }
       }
+      if (headerIdx === -1) continue;
 
+      const headers = rows[headerIdx].map(h => String(h).trim());
+      const col = name => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
+
+      // Map columns by name (works for both old and new format)
+      const iDate = 0;
+      const iGMV  = col('GMV') > -1 ? col('GMV') : -1;
+      const iOrd  = col('Orders');
+      const iImp  = headers.findIndex(h => h === 'Product impressions' || h === 'Product Impressions');
+      const iClk  = headers.findIndex(h => h === 'Product clicks' || h === 'Product Clicks');
+      const iPV   = headers.findIndex(h => h === 'Page Views' || h === 'Page views');
+
+      let totalGmv = 0, totalOrders = 0, totalImpressions = 0, totalPageviews = 0;
       const dailyRows = [];
-      if (dailyStart > 0) {
-        for (let i = dailyStart; i < rows.length; i++) {
-          const r = rows[i];
-          const date = String(r[0] || '').trim();
-          if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) continue;
-          const imp = r[1] === '-' || r[1] === '' ? 0 : (Number(r[1]) || 0);
-          const gmv = r[6] === '-' || r[6] === '' ? 0 : (parseFloat(r[6]) || 0);
-          const ord = r[7] === '-' || r[7] === '' ? 0 : (Number(r[7]) || 0);
-          dailyRows.push({ date, imp, gmv, ord });
-          if (!usedSummary) {
-            totalImpressions += imp; totalGmv += gmv; totalOrders += ord;
-          }
-        }
+
+      for (let i = headerIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        let rawDate = String(r[iDate] || '').trim();
+        if (!rawDate) continue;
+
+        // Normalize date: DD/MM/YYYY → YYYY-MM-DD
+        let date = '';
+        if (rawDate.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+          const [d, m, y] = rawDate.split('/');
+          date = `${y}-${m}-${d}`;
+        } else if (rawDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          date = rawDate;
+        } else continue;
+
+        const toNum = v => (v === '--' || v === '-' || v === '' ? 0 : parseFloat(v) || 0);
+        const gmv  = iGMV  > -1 ? toNum(r[iGMV])  : 0;
+        const ord  = iOrd  > -1 ? toNum(r[iOrd])   : 0;
+        const imp  = iImp  > -1 ? toNum(r[iImp])   : 0;
+        const pv   = iPV   > -1 ? toNum(r[iPV])    : 0;
+
+        totalGmv         += gmv;
+        totalOrders      += ord;
+        totalImpressions += imp;
+        totalPageviews   += pv;
+        dailyRows.push({ date, imp, gmv, ord });
       }
 
       const key = monthKey || (dailyRows.length > 0 ? dailyRows[0].date.slice(0,7) : sheetName);
@@ -986,14 +991,12 @@ async function loadTrafficFromSheets() {
     }
 
     const months = Object.keys(monthData).sort();
-    const latestMonth = months[months.length - 1];
+    if (!months.length) throw new Error('沒有找到任何月份資料');
 
-    // Store globally for month switcher
     window._trafficMonthData = monthData;
     window._trafficMonths = months;
     window._currentMonthIdx = months.length - 1;
 
-    // Show month switcher if multiple months
     if (months.length > 1) {
       document.getElementById('monthSwitcher').style.display = 'flex';
     }

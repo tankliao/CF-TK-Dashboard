@@ -499,9 +499,16 @@ a.tbl-link:hover { text-decoration: underline; }
 
   <!-- ⑤ VIDEO PERFORMANCE -->
   <div id="page-video" class="page">
-    <div class="page-header">
-      <div class="page-title">影片成效 Video Performance</div>
-      <div class="page-sub" id="videoSub">載入中...</div>
+    <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+      <div>
+        <div class="page-title">影片成效 Video Performance</div>
+        <div class="page-sub" id="videoSub">載入中...</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;" id="videoMonthSwitcher" style="display:none;">
+        <button onclick="switchVideoMonth(-1)" style="font-family:'DM Sans',sans-serif;font-size:12px;padding:5px 12px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--text2);">← 上月</button>
+        <span id="videoMonthLabel" style="font-size:13px;font-weight:500;color:var(--text);min-width:80px;text-align:center;">—</span>
+        <button onclick="switchVideoMonth(1)" id="videoNextMonthBtn" style="font-family:'DM Sans',sans-serif;font-size:12px;padding:5px 12px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--text2);">當月 →</button>
+      </div>
     </div>
 
     <div class="metrics" style="margin-bottom:1.25rem;">
@@ -1131,123 +1138,163 @@ async function loadVideoFromSheets() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
 
-    // Find header row (contains 'Creator name')
-    let headerIdx = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]).trim() === 'Creator name') { headerIdx = i; break; }
-    }
-    if (headerIdx === -1) throw new Error('找不到標題列');
+    // Find all YYYY-MM sheets
+    const monthSheets = wb.SheetNames.filter(n => /^\d{4}-\d{2}$/.test(n)).sort();
+    const sheetsToRead = monthSheets.length > 0 ? monthSheets : [wb.SheetNames[0]];
 
-    const headers = rows[headerIdx].map(h => String(h).trim());
-    const col = name => headers.indexOf(name);
+    const videoMonthData = {}; // { 'YYYY-MM': videos[] }
 
-    const iVV   = col('VV');
-    const iLike = col('Likes');
-    const iCmt  = col('Comments');
-    const iShr  = col('Shares');
-    const iPImp = col('Product Impressions');
-    const iOrd  = col('Orders');
-    const iGMV  = col('Gross merchandise value (Video) ($)');
-    const iVFR  = col('Video Finish Rate');
-    const iCTR  = col('Click-through rate (Video)');
-    const iInfo = col('Video Info');
-    const iTime = col('Time');
+    for (const sheetName of sheetsToRead) {
+      const ws = wb.Sheets[sheetName];
+      if (!ws) continue;
+      const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
 
-    const videos = [];
-    for (let i = headerIdx + 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (!r[iInfo] && !r[iVV]) continue;
-      videos.push({
-        info:   String(r[iInfo] || '').trim(),
-        time:   String(r[iTime] || '').trim(),
-        vv:     Number(r[iVV])   || 0,
-        likes:  Number(r[iLike]) || 0,
-        cmt:    Number(r[iCmt])  || 0,
-        shares: Number(r[iShr])  || 0,
-        pimp:   Number(r[iPImp]) || 0,
-        orders: Number(r[iOrd])  || 0,
-        gmv:    parseFloat(r[iGMV]) || 0,
-        vfr:    String(r[iVFR] || '0%'),
-        ctr:    String(r[iCTR] || '0%'),
-      });
-    }
-
-    if (!videos.length) throw new Error('沒有影片資料');
-
-    // KPI totals
-    const totalVV  = videos.reduce((a,v) => a+v.vv, 0);
-    const totalOrd = videos.reduce((a,v) => a+v.orders, 0);
-    const totalGMV = videos.reduce((a,v) => a+v.gmv, 0);
-
-    document.getElementById('v-count').textContent  = videos.length;
-    document.getElementById('v-vv').textContent     = totalVV.toLocaleString();
-    document.getElementById('v-orders').textContent = totalOrd;
-    document.getElementById('v-gmv').textContent    = '$' + totalGMV.toFixed(2);
-    document.getElementById('videoSub').textContent = `共 ${videos.length} 支影片`;
-
-    // Top 5 by VV chart
-    const top5 = [...videos].sort((a,b) => b.vv - a.vv).slice(0, 5);
-    const shortLabel = v => v.info.slice(0, 30) + (v.info.length > 30 ? '…' : '');
-
-    destroyChart('videoVVChart');
-    charts.videoVVChart = new Chart(document.getElementById('videoVVChart'), {
-      type: 'bar',
-      data: {
-        labels: top5.map(v => shortLabel(v)),
-        datasets: [{ label: 'VV', data: top5.map(v => v.vv), backgroundColor: '#2d7a4f', borderRadius: 4 }]
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 } }, beginAtZero: true },
-          y: { grid: { display: false }, ticks: { color: '#6b6860', font: { size: 11 } } }
-        }
+      // Find header row
+      let headerIdx = -1;
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i][0]).trim() === 'Creator name') { headerIdx = i; break; }
       }
-    });
+      if (headerIdx === -1) continue;
 
-    // Engagement chart
-    const totalLikes  = videos.reduce((a,v) => a+v.likes, 0);
-    const totalCmt    = videos.reduce((a,v) => a+v.cmt, 0);
-    const totalShares = videos.reduce((a,v) => a+v.shares, 0);
-    document.getElementById('engagementLegend').innerHTML = `
-      <span class="legend-item"><span class="legend-dot" style="background:#2d7a4f;"></span>Likes: ${totalLikes}</span>
-      <span class="legend-item"><span class="legend-dot" style="background:#185FA5;"></span>Comments: ${totalCmt}</span>
-      <span class="legend-item"><span class="legend-dot" style="background:#BA7517;"></span>Shares: ${totalShares}</span>`;
+      const headers = rows[headerIdx].map(h => String(h).trim());
+      const col = name => headers.indexOf(name);
 
-    destroyChart('engagementChart');
-    charts.engagementChart = new Chart(document.getElementById('engagementChart'), {
-      type: 'doughnut',
-      data: {
-        labels: ['Likes', 'Comments', 'Shares'],
-        datasets: [{ data: [totalLikes, totalCmt, totalShares], backgroundColor: ['#2d7a4f','#185FA5','#BA7517'], borderWidth: 0 }]
-      },
-      options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { display: false } } }
-    });
+      const iVV   = col('VV');
+      const iLike = col('Likes');
+      const iCmt  = col('Comments');
+      const iShr  = col('Shares');
+      const iPImp = col('Product Impressions');
+      const iOrd  = col('Orders');
+      const iGMV  = col('Gross merchandise value (Video) ($)');
+      const iVFR  = col('Video Finish Rate');
+      const iInfo = col('Video Info');
+      const iTime = col('Time');
 
-    // Table
-    const tbody = document.getElementById('videoTableBody');
-    tbody.innerHTML = videos.map(v => `<tr>
-      <td style="font-size:12px;max-width:220px;line-height:1.4;">${v.info.slice(0,80)}${v.info.length>80?'…':''}</td>
-      <td style="font-size:11px;color:var(--text3);white-space:nowrap;">${v.time.slice(0,10)}</td>
-      <td>${v.vv.toLocaleString()}</td>
-      <td>${v.likes}</td>
-      <td>${v.cmt}</td>
-      <td>${v.shares}</td>
-      <td>${v.pimp}</td>
-      <td style="color:${v.orders>0?'var(--green)':'inherit'};font-weight:${v.orders>0?'500':'400'}">${v.orders}</td>
-      <td style="color:${v.gmv>0?'var(--green)':'inherit'};font-weight:${v.gmv>0?'500':'400'}">${v.gmv>0?'$'+v.gmv.toFixed(2):'—'}</td>
-      <td>${v.vfr}</td>
-    </tr>`).join('');
+      const videos = [];
+      for (let i = headerIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r[iInfo] && !r[iVV]) continue;
+        videos.push({
+          info:   String(r[iInfo] || '').trim(),
+          time:   String(r[iTime] || '').trim(),
+          vv:     Number(r[iVV])      || 0,
+          likes:  Number(r[iLike])    || 0,
+          cmt:    Number(r[iCmt])     || 0,
+          shares: Number(r[iShr])     || 0,
+          pimp:   Number(r[iPImp])    || 0,
+          orders: Number(r[iOrd])     || 0,
+          gmv:    parseFloat(r[iGMV]) || 0,
+          vfr:    String(r[iVFR] || '—'),
+        });
+      }
+
+      const key = /^\d{4}-\d{2}$/.test(sheetName) ? sheetName
+        : (videos.length > 0 ? videos[0].time.slice(0,7).replace('/','-') : sheetName);
+      videoMonthData[key] = videos;
+    }
+
+    const months = Object.keys(videoMonthData).sort();
+    if (!months.length) throw new Error('沒有影片資料');
+
+    window._videoMonthData = videoMonthData;
+    window._videoMonths = months;
+    window._videoMonthIdx = months.length - 1;
+
+    if (months.length > 1) {
+      document.getElementById('videoMonthSwitcher').style.display = 'flex';
+    }
+
+    renderVideoMonth(months.length - 1);
 
   } catch(e) {
     document.getElementById('videoSub').textContent = '影片數據載入失敗：' + e.message;
     console.warn('Video load error:', e);
   }
+}
+
+function switchVideoMonth(dir) {
+  const months = window._videoMonths || [];
+  let idx = (window._videoMonthIdx || 0) + dir;
+  idx = Math.max(0, Math.min(months.length - 1, idx));
+  window._videoMonthIdx = idx;
+  renderVideoMonth(idx);
+}
+
+function renderVideoMonth(idx) {
+  const months = window._videoMonths || [];
+  const videoMonthData = window._videoMonthData || {};
+  if (!months.length) return;
+
+  const videos = videoMonthData[months[idx]] || [];
+  const isLatest = idx === months.length - 1;
+
+  document.getElementById('videoMonthLabel').textContent = months[idx];
+  document.getElementById('videoNextMonthBtn').style.opacity = isLatest ? '0.3' : '1';
+  document.getElementById('videoNextMonthBtn').style.pointerEvents = isLatest ? 'none' : 'auto';
+  document.getElementById('videoSub').textContent = `${months[idx]} · 共 ${videos.length} 支影片`;
+
+  const totalVV  = videos.reduce((a,v) => a+v.vv, 0);
+  const totalOrd = videos.reduce((a,v) => a+v.orders, 0);
+  const totalGMV = videos.reduce((a,v) => a+v.gmv, 0);
+
+  document.getElementById('v-count').textContent  = videos.length;
+  document.getElementById('v-vv').textContent     = totalVV.toLocaleString();
+  document.getElementById('v-orders').textContent = totalOrd;
+  document.getElementById('v-gmv').textContent    = '$' + totalGMV.toFixed(2);
+
+  // Top 5 by VV
+  const top5 = [...videos].sort((a,b) => b.vv - a.vv).slice(0, 5);
+  destroyChart('videoVVChart');
+  charts.videoVVChart = new Chart(document.getElementById('videoVVChart'), {
+    type: 'bar',
+    data: {
+      labels: top5.map(v => v.info.slice(0,30) + (v.info.length>30?'…':'')),
+      datasets: [{ label: 'VV', data: top5.map(v => v.vv), backgroundColor: '#2d7a4f', borderRadius: 4 }]
+    },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 } }, beginAtZero: true },
+        y: { grid: { display: false }, ticks: { color: '#6b6860', font: { size: 11 } } }
+      }
+    }
+  });
+
+  // Engagement
+  const totalLikes  = videos.reduce((a,v) => a+v.likes, 0);
+  const totalCmt    = videos.reduce((a,v) => a+v.cmt, 0);
+  const totalShares = videos.reduce((a,v) => a+v.shares, 0);
+  document.getElementById('engagementLegend').innerHTML = `
+    <span class="legend-item"><span class="legend-dot" style="background:#2d7a4f;"></span>Likes: ${totalLikes}</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#185FA5;"></span>Comments: ${totalCmt}</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#BA7517;"></span>Shares: ${totalShares}</span>`;
+
+  destroyChart('engagementChart');
+  charts.engagementChart = new Chart(document.getElementById('engagementChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Likes', 'Comments', 'Shares'],
+      datasets: [{ data: [totalLikes, totalCmt, totalShares], backgroundColor: ['#2d7a4f','#185FA5','#BA7517'], borderWidth: 0 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { display: false } } }
+  });
+
+  // Table
+  const tbody = document.getElementById('videoTableBody');
+  tbody.innerHTML = videos.length ? videos.map(v => `<tr>
+    <td style="font-size:12px;max-width:220px;line-height:1.4;">${v.info.slice(0,80)}${v.info.length>80?'…':''}</td>
+    <td style="font-size:11px;color:var(--text3);white-space:nowrap;">${v.time.slice(0,10)}</td>
+    <td>${v.vv.toLocaleString()}</td>
+    <td>${v.likes}</td>
+    <td>${v.cmt}</td>
+    <td>${v.shares}</td>
+    <td>${v.pimp}</td>
+    <td style="color:${v.orders>0?'var(--green)':'inherit'};font-weight:${v.orders>0?'500':'400'}">${v.orders}</td>
+    <td style="color:${v.gmv>0?'var(--green)':'inherit'};font-weight:${v.gmv>0?'500':'400'}">${v.gmv>0?'$'+v.gmv.toFixed(2):'—'}</td>
+    <td>${v.vfr}</td>
+  </tr>`).join('') : '<tr><td colspan="10" class="empty">此月份沒有影片資料</td></tr>';
 }
 function handleDrop(e) {
   e.preventDefault();

@@ -380,7 +380,7 @@ a.tbl-link:hover { text-decoration: underline; }
         <div id="mom-imp-badge" style="font-size:11px;margin-top:4px;"></div>
       </div>
       <div class="metric">
-        <div class="metric-label">頁面瀏覽 Page Views</div>
+        <div class="metric-label">商品點擊 Product Clicks</div>
         <div class="metric-value" id="m-pageviews">—</div>
         <div id="mom-pv-badge" style="font-size:11px;margin-top:4px;"></div>
       </div>
@@ -515,18 +515,22 @@ a.tbl-link:hover { text-decoration: underline; }
       <div class="metric">
         <div class="metric-label">影片總數 Videos</div>
         <div class="metric-value" id="v-count">—</div>
+        <div id="v-mom-count" style="font-size:11px;margin-top:4px;"></div>
       </div>
       <div class="metric">
         <div class="metric-label">總觀看 Total VV</div>
         <div class="metric-value" id="v-vv">—</div>
+        <div id="v-mom-vv" style="font-size:11px;margin-top:4px;"></div>
       </div>
       <div class="metric">
         <div class="metric-label">總訂單 Orders</div>
         <div class="metric-value" id="v-orders">—</div>
+        <div id="v-mom-orders" style="font-size:11px;margin-top:4px;"></div>
       </div>
       <div class="metric">
         <div class="metric-label">總 GMV</div>
         <div class="metric-value" id="v-gmv">—</div>
+        <div id="v-mom-gmv" style="font-size:11px;margin-top:4px;"></div>
       </div>
     </div>
 
@@ -539,6 +543,20 @@ a.tbl-link:hover { text-decoration: underline; }
         <div class="card-title">互動數據 Engagement</div>
         <div id="engagementLegend" class="legend"></div>
         <div style="position:relative;height:220px;"><canvas id="engagementChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Video MoM Section -->
+    <div id="videoMomSection" style="display:none;margin-bottom:1.25rem;">
+      <div class="two-col">
+        <div class="card">
+          <div class="card-title">VV 月份比較 VV by Month</div>
+          <div style="position:relative;height:200px;"><canvas id="videoMomVVChart"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-title">GMV 月份比較 GMV by Month</div>
+          <div style="position:relative;height:200px;"><canvas id="videoMomGMVChart"></canvas></div>
+        </div>
       </div>
     </div>
 
@@ -932,10 +950,8 @@ async function loadTrafficFromSheets() {
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: 'array' });
 
-    // Find all YYYY-MM sheets
     const monthSheets = wb.SheetNames.filter(n => /^\d{4}-\d{2}$/.test(n)).sort();
     const sheetsToRead = monthSheets.length > 0 ? monthSheets : [wb.SheetNames[0]];
-
     const monthData = {};
 
     for (const sheetName of sheetsToRead) {
@@ -943,9 +959,7 @@ async function loadTrafficFromSheets() {
       if (!ws) continue;
       const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
 
-      const monthKey = /^\d{4}-\d{2}$/.test(sheetName) ? sheetName : null;
-
-      // Find header row — look for row containing 'Date'
+      // Find header row containing 'Date'
       let headerIdx = -1;
       for (let i = 0; i < rows.length; i++) {
         if (String(rows[i][0]).trim() === 'Date') { headerIdx = i; break; }
@@ -953,17 +967,15 @@ async function loadTrafficFromSheets() {
       if (headerIdx === -1) continue;
 
       const headers = rows[headerIdx].map(h => String(h).trim());
-      const col = name => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
+      const col = name => headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
 
-      // Map columns by name (works for both old and new format)
       const iDate = 0;
-      const iGMV  = col('GMV') > -1 ? col('GMV') : -1;
+      const iGMV  = col('GMV');
       const iOrd  = col('Orders');
-      const iImp  = headers.findIndex(h => h === 'Product impressions' || h === 'Product Impressions');
-      const iClk  = headers.findIndex(h => h === 'Product clicks' || h === 'Product Clicks');
-      const iPV   = headers.findIndex(h => h === 'Page Views' || h === 'Page views');
+      const iImp  = col('Product impressions');
+      const iClk  = col('Product clicks');
 
-      let totalGmv = 0, totalOrders = 0, totalImpressions = 0, totalPageviews = 0;
+      let totalGmv = 0, totalOrders = 0, totalImpressions = 0, totalClicks = 0;
       const dailyRows = [];
 
       for (let i = headerIdx + 1; i < rows.length; i++) {
@@ -971,7 +983,7 @@ async function loadTrafficFromSheets() {
         let rawDate = String(r[iDate] || '').trim();
         if (!rawDate) continue;
 
-        // Normalize date: DD/MM/YYYY → YYYY-MM-DD
+        // Normalize: DD/MM/YYYY → YYYY-MM-DD
         let date = '';
         if (rawDate.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
           const [d, m, y] = rawDate.split('/');
@@ -980,21 +992,34 @@ async function loadTrafficFromSheets() {
           date = rawDate;
         } else continue;
 
-        const toNum = v => (v === '--' || v === '-' || v === '' ? 0 : parseFloat(v) || 0);
-        const gmv  = iGMV  > -1 ? toNum(r[iGMV])  : 0;
-        const ord  = iOrd  > -1 ? toNum(r[iOrd])   : 0;
-        const imp  = iImp  > -1 ? toNum(r[iImp])   : 0;
-        const pv   = iPV   > -1 ? toNum(r[iPV])    : 0;
+        const toNum = v => {
+          if (v === '--' || v === '-' || v === '' || v === null) return 0;
+          // Handle $0.00 format
+          return parseFloat(String(v).replace(/[$,]/g, '')) || 0;
+        };
+
+        const gmv = iGMV > -1 ? toNum(r[iGMV]) : 0;
+        const ord = iOrd > -1 ? toNum(r[iOrd]) : 0;
+        const imp = iImp > -1 ? toNum(r[iImp]) : 0;
+        const clk = iClk > -1 ? toNum(r[iClk]) : 0;
 
         totalGmv         += gmv;
         totalOrders      += ord;
         totalImpressions += imp;
-        totalPageviews   += pv;
+        totalClicks      += clk;
         dailyRows.push({ date, imp, gmv, ord });
       }
 
-      const key = monthKey || (dailyRows.length > 0 ? dailyRows[0].date.slice(0,7) : sheetName);
-      monthData[key] = { impressions: totalImpressions, pageviews: totalPageviews, gmv: totalGmv, orders: totalOrders, dailyRows };
+      const key = /^\d{4}-\d{2}$/.test(sheetName) ? sheetName
+        : (dailyRows.length > 0 ? dailyRows[0].date.slice(0,7) : sheetName);
+
+      monthData[key] = {
+        impressions: totalImpressions,
+        pageviews: totalClicks, // repurposed for Product Clicks
+        gmv: totalGmv,
+        orders: totalOrders,
+        dailyRows
+      };
     }
 
     const months = Object.keys(monthData).sort();
@@ -1227,6 +1252,7 @@ function renderVideoMonth(idx) {
   if (!months.length) return;
 
   const videos = videoMonthData[months[idx]] || [];
+  const prevVideos = idx > 0 ? (videoMonthData[months[idx-1]] || []) : null;
   const isLatest = idx === months.length - 1;
 
   document.getElementById('videoMonthLabel').textContent = months[idx];
@@ -1238,10 +1264,20 @@ function renderVideoMonth(idx) {
   const totalOrd = videos.reduce((a,v) => a+v.orders, 0);
   const totalGMV = videos.reduce((a,v) => a+v.gmv, 0);
 
+  const prevVV  = prevVideos ? prevVideos.reduce((a,v) => a+v.vv, 0) : null;
+  const prevOrd = prevVideos ? prevVideos.reduce((a,v) => a+v.orders, 0) : null;
+  const prevGMV = prevVideos ? prevVideos.reduce((a,v) => a+v.gmv, 0) : null;
+  const prevCnt = prevVideos ? prevVideos.length : null;
+
   document.getElementById('v-count').textContent  = videos.length;
   document.getElementById('v-vv').textContent     = totalVV.toLocaleString();
   document.getElementById('v-orders').textContent = totalOrd;
   document.getElementById('v-gmv').textContent    = '$' + totalGMV.toFixed(2);
+
+  document.getElementById('v-mom-count').innerHTML  = prevCnt  !== null ? momBadge(videos.length, prevCnt)  : '';
+  document.getElementById('v-mom-vv').innerHTML     = prevVV   !== null ? momBadge(totalVV, prevVV)          : '';
+  document.getElementById('v-mom-orders').innerHTML = prevOrd  !== null ? momBadge(totalOrd, prevOrd)        : '';
+  document.getElementById('v-mom-gmv').innerHTML    = prevGMV  !== null ? momBadge(totalGMV, prevGMV)        : '';
 
   // Top 5 by VV
   const top5 = [...videos].sort((a,b) => b.vv - a.vv).slice(0, 5);
@@ -1280,6 +1316,44 @@ function renderVideoMonth(idx) {
     },
     options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { display: false } } }
   });
+
+  // MoM Charts (show only if 2+ months)
+  const momSection = document.getElementById('videoMomSection');
+  if (months.length > 1) {
+    momSection.style.display = 'block';
+    const allVV  = months.map(m => (videoMonthData[m] || []).reduce((a,v) => a+v.vv, 0));
+    const allGMV = months.map(m => parseFloat((videoMonthData[m] || []).reduce((a,v) => a+v.gmv, 0).toFixed(2)));
+
+    destroyChart('videoMomVVChart');
+    charts.videoMomVVChart = new Chart(document.getElementById('videoMomVVChart'), {
+      type: 'bar',
+      data: { labels: months, datasets: [{ label: 'VV', data: allVV, backgroundColor: '#2d7a4f', borderRadius: 4 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 12 } } },
+          y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 } }, beginAtZero: true }
+        }
+      }
+    });
+
+    destroyChart('videoMomGMVChart');
+    charts.videoMomGMVChart = new Chart(document.getElementById('videoMomGMVChart'), {
+      type: 'bar',
+      data: { labels: months, datasets: [{ label: 'GMV ($)', data: allGMV, backgroundColor: '#185FA5', borderRadius: 4 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 12 } } },
+          y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#a09e99', font: { size: 11 }, callback: v => '$'+v }, beginAtZero: true }
+        }
+      }
+    });
+  } else {
+    momSection.style.display = 'none';
+  }
 
   // Table
   const tbody = document.getElementById('videoTableBody');

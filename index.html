@@ -1269,17 +1269,14 @@ function renderVideoMonth(idx) {
   // Calculate incremental diff (cumulative this month - cumulative last month)
   const diffVideos = videos.map(v => {
     const prev = prevMap[v.vid];
-    return {
-      ...v,
-      dvv:     prev ? v.vv     - prev.vv     : v.vv,
-      dlikes:  prev ? v.likes  - prev.likes  : v.likes,
-      dcmt:    prev ? v.cmt    - prev.cmt    : v.cmt,
-      dshares: prev ? v.shares - prev.shares : v.shares,
-      dpimp:   prev ? v.pimp   - prev.pimp   : v.pimp,
-      dorders: prev ? v.orders - prev.orders : v.orders,
-      dgmv:    prev ? v.gmv    - prev.gmv    : v.gmv,
-      isPrev:  !!prev,
-    };
+    const dvv     = prev ? Math.max(0, v.vv     - prev.vv)     : v.vv;
+    const dlikes  = prev ? Math.max(0, v.likes  - prev.likes)  : v.likes;
+    const dcmt    = prev ? Math.max(0, v.cmt    - prev.cmt)    : v.cmt;
+    const dshares = prev ? Math.max(0, v.shares - prev.shares) : v.shares;
+    const dpimp   = prev ? Math.max(0, v.pimp   - prev.pimp)   : v.pimp;
+    const dorders = prev ? Math.max(0, v.orders - prev.orders) : v.orders;
+    const dgmv    = prev ? Math.max(0, v.gmv    - prev.gmv)    : v.gmv;
+    return { ...v, dvv, dlikes, dcmt, dshares, dpimp, dorders, dgmv, isPrev: !!prev };
   });
 
   document.getElementById('videoMonthLabel').textContent = months[idx];
@@ -1400,7 +1397,7 @@ function renderVideoMonth(idx) {
   const hasPrev = !!prevVideos;
   const tbody = document.getElementById('videoTableBody');
   tbody.innerHTML = diffVideos.length ? diffVideos.map(v => {
-    const dvvBadge = hasPrev && v.isPrev
+    const dvvBadge = hasPrev && v.isPrev && v.dvv !== 0
       ? ` <span style="font-size:10px;color:${v.dvv>=0?'var(--green)':'var(--red)'}">(${v.dvv>=0?'+':''}${v.dvv})</span>` : '';
     const dgmvBadge = hasPrev && v.isPrev && v.dgmv !== 0
       ? ` <span style="font-size:10px;color:${v.dgmv>=0?'var(--green)':'var(--red)'}">(${v.dgmv>=0?'+':''}$${v.dgmv.toFixed(2)})</span>` : '';

@@ -1200,10 +1200,19 @@ async function loadVideoFromSheets() {
         const vid = String(r[iVID] || '').trim();
         if (!vid) continue;
         const toN = v => parseFloat(String(v).replace(/[$,%]/g,'')) || 0;
+        const rawTime = r[iTime];
+        let timeStr = '';
+        if (rawTime && !isNaN(Number(rawTime)) && Number(rawTime) > 40000) {
+          // Excel serial date → JS Date
+          const d = new Date(Math.round((Number(rawTime) - 25569) * 86400 * 1000));
+          timeStr = d.toISOString().slice(0, 10);
+        } else {
+          timeStr = String(rawTime || '').trim().slice(0, 10);
+        }
         videos.push({
           vid,
           info:   String(r[iInfo] || '').trim(),
-          time:   String(r[iTime] || '').trim(),
+          time:   timeStr,
           vv:     toN(r[iVV]),
           likes:  toN(r[iLike]),
           cmt:    toN(r[iCmt]),

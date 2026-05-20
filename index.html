@@ -1164,18 +1164,15 @@ async function loadVideoFromSheets() {
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: 'array' });
 
-    // Find all YYYY-MM sheets
     const monthSheets = wb.SheetNames.filter(n => /^\d{4}-\d{2}$/.test(n)).sort();
     const sheetsToRead = monthSheets.length > 0 ? monthSheets : [wb.SheetNames[0]];
-
-    const videoMonthData = {}; // { 'YYYY-MM': videos[] }
+    const videoMonthData = {};
 
     for (const sheetName of sheetsToRead) {
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
       const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
 
-      // Find header row
       let headerIdx = -1;
       for (let i = 0; i < rows.length; i++) {
         if (String(rows[i][0]).trim() === 'Creator name') { headerIdx = i; break; }
@@ -1183,39 +1180,42 @@ async function loadVideoFromSheets() {
       if (headerIdx === -1) continue;
 
       const headers = rows[headerIdx].map(h => String(h).trim());
-      const col = name => headers.indexOf(name);
+      const col = name => headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
 
-      const iVV   = col('VV');
-      const iLike = col('Likes');
-      const iCmt  = col('Comments');
-      const iShr  = col('Shares');
-      const iPImp = col('Product Impressions');
-      const iOrd  = col('Orders');
-      const iGMV  = col('Gross merchandise value (Video) ($)');
-      const iVFR  = col('Video Finish Rate');
-      const iInfo = col('Video Info');
-      const iTime = col('Time');
+      const iVID  = col('video id');
+      const iInfo = col('video info');
+      const iTime = col('time');
+      const iVV   = col('vv');
+      const iLike = col('likes');
+      const iCmt  = col('comments');
+      const iShr  = col('shares');
+      const iPImp = col('product impressions');
+      const iOrd  = col('orders');
+      const iGMV  = headers.findIndex(h => h.toLowerCase().includes('gross merchandise value (video)'));
+      const iVFR  = col('video finish rate');
 
       const videos = [];
       for (let i = headerIdx + 1; i < rows.length; i++) {
         const r = rows[i];
-        if (!r[iInfo] && !r[iVV]) continue;
+        const vid = String(r[iVID] || '').trim();
+        if (!vid) continue;
+        const toN = v => parseFloat(String(v).replace(/[$,%]/g,'')) || 0;
         videos.push({
+          vid,
           info:   String(r[iInfo] || '').trim(),
           time:   String(r[iTime] || '').trim(),
-          vv:     Number(r[iVV])      || 0,
-          likes:  Number(r[iLike])    || 0,
-          cmt:    Number(r[iCmt])     || 0,
-          shares: Number(r[iShr])     || 0,
-          pimp:   Number(r[iPImp])    || 0,
-          orders: Number(r[iOrd])     || 0,
-          gmv:    parseFloat(r[iGMV]) || 0,
+          vv:     toN(r[iVV]),
+          likes:  toN(r[iLike]),
+          cmt:    toN(r[iCmt]),
+          shares: toN(r[iShr]),
+          pimp:   toN(r[iPImp]),
+          orders: toN(r[iOrd]),
+          gmv:    toN(r[iGMV]),
           vfr:    String(r[iVFR] || '—'),
         });
       }
 
-      const key = /^\d{4}-\d{2}$/.test(sheetName) ? sheetName
-        : (videos.length > 0 ? videos[0].time.slice(0,7).replace('/','-') : sheetName);
+      const key = /^\d{4}-\d{2}$/.test(sheetName) ? sheetName : sheetName;
       videoMonthData[key] = videos;
     }
 
@@ -1226,9 +1226,7 @@ async function loadVideoFromSheets() {
     window._videoMonths = months;
     window._videoMonthIdx = months.length - 1;
 
-    if (months.length > 1) {
-      document.getElementById('videoMonthSwitcher').style.display = 'flex';
-    }
+    if (months.length > 1) document.getElementById('videoMonthSwitcher').style.display = 'flex';
 
     renderVideoMonth(months.length - 1);
 
@@ -1255,38 +1253,59 @@ function renderVideoMonth(idx) {
   const prevVideos = idx > 0 ? (videoMonthData[months[idx-1]] || []) : null;
   const isLatest = idx === months.length - 1;
 
+  // Build prev lookup by Video ID
+  const prevMap = {};
+  if (prevVideos) prevVideos.forEach(v => { prevMap[v.vid] = v; });
+
+  // Calculate incremental diff (cumulative this month - cumulative last month)
+  const diffVideos = videos.map(v => {
+    const prev = prevMap[v.vid];
+    return {
+      ...v,
+      dvv:     prev ? v.vv     - prev.vv     : v.vv,
+      dlikes:  prev ? v.likes  - prev.likes  : v.likes,
+      dcmt:    prev ? v.cmt    - prev.cmt    : v.cmt,
+      dshares: prev ? v.shares - prev.shares : v.shares,
+      dpimp:   prev ? v.pimp   - prev.pimp   : v.pimp,
+      dorders: prev ? v.orders - prev.orders : v.orders,
+      dgmv:    prev ? v.gmv    - prev.gmv    : v.gmv,
+      isPrev:  !!prev,
+    };
+  });
+
   document.getElementById('videoMonthLabel').textContent = months[idx];
   document.getElementById('videoNextMonthBtn').style.opacity = isLatest ? '0.3' : '1';
   document.getElementById('videoNextMonthBtn').style.pointerEvents = isLatest ? 'none' : 'auto';
-  document.getElementById('videoSub').textContent = `${months[idx]} · 共 ${videos.length} 支影片`;
+  document.getElementById('videoSub').textContent = `${months[idx]} · 共 ${videos.length} 支影片${prevVideos ? ' · 顯示月增量' : ''}`;
 
-  const totalVV  = videos.reduce((a,v) => a+v.vv, 0);
-  const totalOrd = videos.reduce((a,v) => a+v.orders, 0);
-  const totalGMV = videos.reduce((a,v) => a+v.gmv, 0);
+  // KPI — this month's incremental totals
+  const totalVV  = diffVideos.reduce((a,v) => a + v.dvv, 0);
+  const totalOrd = diffVideos.reduce((a,v) => a + v.dorders, 0);
+  const totalGMV = diffVideos.reduce((a,v) => a + v.dgmv, 0);
 
-  const prevVV  = prevVideos ? prevVideos.reduce((a,v) => a+v.vv, 0) : null;
-  const prevOrd = prevVideos ? prevVideos.reduce((a,v) => a+v.orders, 0) : null;
-  const prevGMV = prevVideos ? prevVideos.reduce((a,v) => a+v.gmv, 0) : null;
-  const prevCnt = prevVideos ? prevVideos.length : null;
+  const prevTotalVV  = prevVideos ? prevVideos.reduce((a,v) => a+v.vv, 0) : null;
+  const prevTotalOrd = prevVideos ? prevVideos.reduce((a,v) => a+v.orders, 0) : null;
+  const prevTotalGMV = prevVideos ? prevVideos.reduce((a,v) => a+v.gmv, 0) : null;
+  const prevCnt      = prevVideos ? prevVideos.length : null;
 
   document.getElementById('v-count').textContent  = videos.length;
   document.getElementById('v-vv').textContent     = totalVV.toLocaleString();
   document.getElementById('v-orders').textContent = totalOrd;
   document.getElementById('v-gmv').textContent    = '$' + totalGMV.toFixed(2);
 
-  document.getElementById('v-mom-count').innerHTML  = prevCnt  !== null ? momBadge(videos.length, prevCnt)  : '';
-  document.getElementById('v-mom-vv').innerHTML     = prevVV   !== null ? momBadge(totalVV, prevVV)          : '';
-  document.getElementById('v-mom-orders').innerHTML = prevOrd  !== null ? momBadge(totalOrd, prevOrd)        : '';
-  document.getElementById('v-mom-gmv').innerHTML    = prevGMV  !== null ? momBadge(totalGMV, prevGMV)        : '';
+  document.getElementById('v-mom-count').innerHTML  = prevCnt      !== null ? momBadge(videos.length, prevCnt)       : '';
+  document.getElementById('v-mom-vv').innerHTML     = prevTotalVV  !== null ? momBadge(totalVV,       prevTotalVV)   : '';
+  document.getElementById('v-mom-orders').innerHTML = prevTotalOrd !== null ? momBadge(totalOrd,      prevTotalOrd)  : '';
+  document.getElementById('v-mom-gmv').innerHTML    = prevTotalGMV !== null ? momBadge(totalGMV,      prevTotalGMV)  : '';
 
-  // Top 5 by VV
-  const top5 = [...videos].sort((a,b) => b.vv - a.vv).slice(0, 5);
+  // Top 5 by incremental VV
+  const top5 = [...diffVideos].sort((a,b) => b.dvv - a.dvv).slice(0, 5);
   destroyChart('videoVVChart');
   charts.videoVVChart = new Chart(document.getElementById('videoVVChart'), {
     type: 'bar',
     data: {
       labels: top5.map(v => v.info.slice(0,30) + (v.info.length>30?'…':'')),
-      datasets: [{ label: 'VV', data: top5.map(v => v.vv), backgroundColor: '#2d7a4f', borderRadius: 4 }]
+      datasets: [{ label: 'VV 增量', data: top5.map(v => v.dvv), backgroundColor: '#2d7a4f', borderRadius: 4 }]
     },
     options: {
       indexAxis: 'y', responsive: true, maintainAspectRatio: false,
@@ -1298,10 +1317,10 @@ function renderVideoMonth(idx) {
     }
   });
 
-  // Engagement
-  const totalLikes  = videos.reduce((a,v) => a+v.likes, 0);
-  const totalCmt    = videos.reduce((a,v) => a+v.cmt, 0);
-  const totalShares = videos.reduce((a,v) => a+v.shares, 0);
+  // Engagement (incremental)
+  const totalLikes  = diffVideos.reduce((a,v) => a+v.dlikes, 0);
+  const totalCmt    = diffVideos.reduce((a,v) => a+v.dcmt, 0);
+  const totalShares = diffVideos.reduce((a,v) => a+v.dshares, 0);
   document.getElementById('engagementLegend').innerHTML = `
     <span class="legend-item"><span class="legend-dot" style="background:#2d7a4f;"></span>Likes: ${totalLikes}</span>
     <span class="legend-item"><span class="legend-dot" style="background:#185FA5;"></span>Comments: ${totalCmt}</span>
@@ -1317,17 +1336,30 @@ function renderVideoMonth(idx) {
     options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { display: false } } }
   });
 
-  // MoM Charts (show only if 2+ months)
+  // MoM Charts
   const momSection = document.getElementById('videoMomSection');
   if (months.length > 1) {
     momSection.style.display = 'block';
-    const allVV  = months.map(m => (videoMonthData[m] || []).reduce((a,v) => a+v.vv, 0));
-    const allGMV = months.map(m => parseFloat((videoMonthData[m] || []).reduce((a,v) => a+v.gmv, 0).toFixed(2)));
+    const calcMonthIncr = (m, i) => {
+      const mvids = videoMonthData[m] || [];
+      const pvids = i > 0 ? (videoMonthData[months[i-1]] || []) : [];
+      const pmap = {}; pvids.forEach(v => pmap[v.vid] = v);
+      return mvids.reduce((a,v) => a + (v.vv - (pmap[v.vid] ? pmap[v.vid].vv : 0)), 0);
+    };
+    const calcGMVIncr = (m, i) => {
+      const mvids = videoMonthData[m] || [];
+      const pvids = i > 0 ? (videoMonthData[months[i-1]] || []) : [];
+      const pmap = {}; pvids.forEach(v => pmap[v.vid] = v);
+      return parseFloat(mvids.reduce((a,v) => a + (v.gmv - (pmap[v.vid] ? pmap[v.vid].gmv : 0)), 0).toFixed(2));
+    };
+
+    const allVV  = months.map((m,i) => calcMonthIncr(m,i));
+    const allGMV = months.map((m,i) => calcGMVIncr(m,i));
 
     destroyChart('videoMomVVChart');
     charts.videoMomVVChart = new Chart(document.getElementById('videoMomVVChart'), {
       type: 'bar',
-      data: { labels: months, datasets: [{ label: 'VV', data: allVV, backgroundColor: '#2d7a4f', borderRadius: 4 }] },
+      data: { labels: months, datasets: [{ label: 'VV 月增量', data: allVV, backgroundColor: '#2d7a4f', borderRadius: 4 }] },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
@@ -1341,7 +1373,7 @@ function renderVideoMonth(idx) {
     destroyChart('videoMomGMVChart');
     charts.videoMomGMVChart = new Chart(document.getElementById('videoMomGMVChart'), {
       type: 'bar',
-      data: { labels: months, datasets: [{ label: 'GMV ($)', data: allGMV, backgroundColor: '#185FA5', borderRadius: 4 }] },
+      data: { labels: months, datasets: [{ label: 'GMV 月增量 ($)', data: allGMV, backgroundColor: '#185FA5', borderRadius: 4 }] },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
@@ -1355,21 +1387,29 @@ function renderVideoMonth(idx) {
     momSection.style.display = 'none';
   }
 
-  // Table
+  // Table — show cumulative + incremental diff
+  const hasPrev = !!prevVideos;
   const tbody = document.getElementById('videoTableBody');
-  tbody.innerHTML = videos.length ? videos.map(v => `<tr>
-    <td style="font-size:12px;max-width:220px;line-height:1.4;">${v.info.slice(0,80)}${v.info.length>80?'…':''}</td>
-    <td style="font-size:11px;color:var(--text3);white-space:nowrap;">${v.time.slice(0,10)}</td>
-    <td>${v.vv.toLocaleString()}</td>
-    <td>${v.likes}</td>
-    <td>${v.cmt}</td>
-    <td>${v.shares}</td>
-    <td>${v.pimp}</td>
-    <td style="color:${v.orders>0?'var(--green)':'inherit'};font-weight:${v.orders>0?'500':'400'}">${v.orders}</td>
-    <td style="color:${v.gmv>0?'var(--green)':'inherit'};font-weight:${v.gmv>0?'500':'400'}">${v.gmv>0?'$'+v.gmv.toFixed(2):'—'}</td>
-    <td>${v.vfr}</td>
-  </tr>`).join('') : '<tr><td colspan="10" class="empty">此月份沒有影片資料</td></tr>';
+  tbody.innerHTML = diffVideos.length ? diffVideos.map(v => {
+    const dvvBadge = hasPrev && v.isPrev
+      ? ` <span style="font-size:10px;color:${v.dvv>=0?'var(--green)':'var(--red)'}">(${v.dvv>=0?'+':''}${v.dvv})</span>` : '';
+    const dgmvBadge = hasPrev && v.isPrev && v.dgmv !== 0
+      ? ` <span style="font-size:10px;color:${v.dgmv>=0?'var(--green)':'var(--red)'}">(${v.dgmv>=0?'+':''}$${v.dgmv.toFixed(2)})</span>` : '';
+    return `<tr>
+      <td style="font-size:12px;max-width:220px;line-height:1.4;">${v.info.slice(0,80)}${v.info.length>80?'…':''}</td>
+      <td style="font-size:11px;color:var(--text3);white-space:nowrap;">${v.time.slice(0,10)}</td>
+      <td>${v.vv.toLocaleString()}${dvvBadge}</td>
+      <td>${v.dlikes}</td>
+      <td>${v.dcmt}</td>
+      <td>${v.dshares}</td>
+      <td>${v.dpimp}</td>
+      <td style="color:${v.dorders>0?'var(--green)':'inherit'};font-weight:${v.dorders>0?'500':'400'}">${v.dorders}</td>
+      <td style="color:${v.dgmv>0?'var(--green)':'inherit'};font-weight:${v.dgmv>0?'500':'400'}">${v.dgmv>0?'$'+v.dgmv.toFixed(2):'—'}${dgmvBadge}</td>
+      <td>${v.vfr}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="10" class="empty">此月份沒有影片資料</td></tr>';
 }
+
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('uploadZone').classList.remove('drag');
